@@ -1,13 +1,3 @@
-# Ansible Role: Swap
-
-[![Build Status](https://travis-ci.org/geerlingguy/ansible-role-swap.svg?branch=master)](https://travis-ci.org/geerlingguy/ansible-role-swap)
-
-An Ansible Role that configures swap space on Linux.
-
-## Requirements
-
-None.
-
 ## Role Variables
 
 Available variables are listed below, along with default values (see `defaults/main.yml`):
@@ -39,25 +29,3 @@ Timeout (in seconds) on the creation of the swap file.
 Period (in seconds) between checks on if the swap file has been created .
 
     swap_file_create_poll_period_in_seconds: 5
-
-## Dependencies
-
-None.
-
-## Example Playbook
-
-    - hosts: all
-    
-      vars:
-        swap_file_size_mb: '1024'
-    
-      roles:
-        - geerlingguy.swap
-
-## License
-
-MIT / BSD
-
-## Author Information
-
-This role was created in 2018 by [Jeff Geerling](https://www.jeffgeerling.com/), author of [Ansible for DevOps](https://www.ansiblefordevops.com/).
