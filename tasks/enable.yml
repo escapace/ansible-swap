@@ -1,4 +1,10 @@
 ---
+
+- name: install util-linux
+  dnf:
+    name: util-linux
+    state: present
+
 - name: Ensure swap file exists.
   command: >
     {{ swap_file_create_command }}
