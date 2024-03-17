@@ -1,5 +1,4 @@
 ---
-
 - name: install util-linux
   ansible.builtin.dnf:
     name: util-linux
@@ -18,7 +17,7 @@
     path: "{{ swap_file_path }}"
     owner: root
     group: root
-    mode: 0600
+    mode: "0600"
 
 - name: Make swap file if necessary.
   ansible.builtin.command: mkswap {{ swap_file_path }}
