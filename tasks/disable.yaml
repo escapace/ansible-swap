@@ -5,5 +5,5 @@
 
 - name: Ensure swap file doesn't exist (if configured).
   ansible.builtin.file:
-    path: "{{ swap_file_path }}"
+    path: '{{ swap_file_path }}'
     state: absent

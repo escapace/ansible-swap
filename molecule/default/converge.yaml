@@ -4,4 +4,4 @@
   vars:
     swap_role_debug: true
   roles:
-    - role: escapace.swap
+    - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
