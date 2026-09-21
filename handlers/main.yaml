@@ -1,0 +1,14 @@
+---
+- name: swap inspect the systemd runtime
+  ansible.builtin.stat:
+    path: /run/systemd/system
+  register: swap_systemd_runtime
+  listen: swap reload systemd manager
+
+- name: swap reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - ansible_facts.get("service_mgr") == "systemd"
+    - swap_systemd_runtime.stat.isdir | default(false)
+  listen: swap reload systemd manager

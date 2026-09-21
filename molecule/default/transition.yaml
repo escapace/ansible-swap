@@ -1,0 +1,24 @@
+---
+- name: prepare a smaller inactive swap file
+  hosts: all
+  vars_files:
+    - group_vars/all.yaml
+  tasks:
+    - name: remove the configured swap file
+      ansible.builtin.file:
+        path: "{{ swap_file_path }}"
+        state: absent
+
+    - name: create a smaller inactive swap file
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/mkswap
+          - --file
+          - --size
+          - "{{ molecule_swap_file_size_bytes // 2 }}"
+          - --lock=yes
+          - "{{ swap_file_path }}"
+      changed_when: true
+
+- name: converge after an inactive swap file size change
+  ansible.builtin.import_playbook: converge.yaml

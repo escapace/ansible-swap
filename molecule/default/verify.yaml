@@ -1,0 +1,75 @@
+---
+- name: verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
+  tasks:
+    - name: inspect the molecule swap file
+      ansible.builtin.stat:
+        path: "{{ swap_file_path }}"
+        get_checksum: false
+      register: molecule_swap_file
+
+    - name: inspect the molecule swap file signature
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/blkid
+          - --probe
+          - --match-tag
+          - TYPE
+          - --output
+          - value
+          - "{{ swap_file_path }}"
+      changed_when: false
+      register: molecule_swap_file_signature
+
+    - name: read active swap files
+      ansible.builtin.slurp:
+        src: /proc/swaps
+      register: molecule_active_swap_files
+
+    - name: read fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: molecule_fstab
+
+    - name: read persistent swappiness
+      ansible.builtin.slurp:
+        src: /etc/sysctl.d/90-swap.conf
+      register: molecule_persistent_swappiness
+
+    - name: read live swappiness before convergence
+      ansible.builtin.slurp:
+        src: /tmp/molecule-swappiness-before
+      register: molecule_swappiness_before
+
+    - name: read live swappiness after convergence
+      ansible.builtin.slurp:
+        src: /proc/sys/vm/swappiness
+      register: molecule_swappiness_after
+
+    - name: validate persistent-only swap configuration
+      ansible.builtin.assert:
+        that:
+          - molecule_swap_file.stat.isreg
+          - molecule_swap_file.stat.size == molecule_swap_file_size_bytes
+          - molecule_swap_file.stat.mode == '0600'
+          - molecule_swap_file.stat.pw_name == 'root'
+          - molecule_swap_file.stat.gr_name == 'root'
+          - molecule_swap_file_signature.stdout | trim == 'swap'
+          - >-
+            (molecule_active_swap_files.content | b64decode)
+            is not search(
+              '(?m)^' ~ (swap_file_path | regex_escape) ~ '\s'
+            )
+          - >-
+            (swap_file_path ~ ' none swap defaults 0 0')
+            in (molecule_fstab.content | b64decode).splitlines()
+          - >-
+            molecule_persistent_swappiness.content | b64decode
+            == 'vm.swappiness = ' ~ swap_swappiness ~ '\n'
+          - >-
+            molecule_swappiness_before.content | b64decode
+            == molecule_swappiness_after.content | b64decode
+        quiet: true

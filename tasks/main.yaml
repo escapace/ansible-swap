@@ -1,14 +1,262 @@
 ---
-- name: Manage swap file entry in fstab.
+- name: validate the swap platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts["os_family"] == "RedHat"
+      - ansible_facts["distribution_major_version"] == "10"
+    fail_msg: >-
+      The swap role supports RHEL-family version 10 systems; this host is
+      {{ ansible_facts["distribution"] }} {{ ansible_facts["distribution_version"] }}.
+    quiet: true
+
+- name: validate the swap configuration
+  ansible.builtin.assert:
+    that:
+      - swap_file_path is string
+      - swap_file_path is match('^/\S+$')
+      - swap_file_path != '/'
+      - >-
+        swap_file_size is string
+        or (swap_file_size is number and swap_file_size is not boolean)
+      - >-
+        (swap_file_size | string | upper)
+        is match(
+          '^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)\s*(?:[KMGTPEZY]B?|B)?$'
+        )
+      - swap_swappiness is integer
+      - swap_swappiness is not boolean
+      - swap_swappiness >= 0
+      - swap_swappiness <= 100
+    fail_msg: >-
+      swap_file_path must be an absolute path without whitespace,
+      swap_file_size must be a number with an optional byte unit, and
+      swap_swappiness must be an integer from 0 through 100.
+    quiet: true
+
+- name: derive the swap file values
+  ansible.builtin.set_fact:
+    swap_file_size_bytes: >-
+      {{
+        swap_file_size
+        | string
+        | upper
+        | ansible.builtin.human_to_bytes(default_unit='M')
+      }}
+    swap_file_staging_path: "{{ swap_file_path }}.ansible-swap.tmp"
+
+- name: validate the parsed swap file size
+  ansible.builtin.assert:
+    that:
+      - swap_file_size_bytes >= 1024 * 1024
+    fail_msg: swap_file_size must represent at least one mebibyte.
+    quiet: true
+
+- name: install swap utilities
+  ansible.builtin.dnf:
+    name: util-linux
+    state: present
+
+- name: inspect the swap file parent directory
+  ansible.builtin.stat:
+    path: "{{ swap_file_path | dirname }}"
+  register: swap_file_parent_directory
+
+- name: validate the swap file parent directory
+  ansible.builtin.assert:
+    that:
+      - swap_file_parent_directory.stat.isdir | default(false)
+    fail_msg: >-
+      The parent directory for {{ swap_file_path }} does not exist or is not a
+      directory.
+    quiet: true
+
+- name: inspect the swap file
+  ansible.builtin.stat:
+    path: "{{ swap_file_path }}"
+    get_checksum: false
+  register: swap_file
+
+- name: validate the existing swap file type
+  ansible.builtin.assert:
+    that:
+      - not swap_file.stat.exists or (swap_file.stat.isreg | default(false))
+    fail_msg: >-
+      Refusing to replace {{ swap_file_path }} because it is not a regular file.
+    quiet: true
+
+- name: inspect the existing swap file signature
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - --probe
+      - --match-tag
+      - TYPE
+      - --output
+      - value
+      - "{{ swap_file_path }}"
+  when: swap_file.stat.exists
+  register: swap_file_signature
+  changed_when: false
+  failed_when: swap_file_signature.rc not in [0, 2]
+
+- name: validate the existing swap file signature
+  ansible.builtin.assert:
+    that:
+      - swap_file_signature.rc == 0
+      - swap_file_signature.stdout | trim == 'swap'
+    fail_msg: >-
+      Refusing to replace {{ swap_file_path }} because the existing regular file
+      is not a valid swap file.
+    quiet: true
+  when: swap_file.stat.exists
+
+- name: determine whether the swap file needs replacement
+  ansible.builtin.set_fact:
+    swap_file_requires_replacement: >-
+      {{
+        not swap_file.stat.exists
+        or swap_file.stat.size != swap_file_size_bytes
+      }}
+
+- name: replace the inactive swap file safely
+  when: swap_file_requires_replacement
+  block:
+    - name: read active swap files
+      ansible.builtin.slurp:
+        src: /proc/swaps
+      register: swap_active_files
+
+    - name: validate the swap file can be replaced safely
+      ansible.builtin.assert:
+        that:
+          - >-
+            (swap_active_files.content | b64decode)
+            is not search(
+              '(?m)^' ~ (swap_file_path | regex_escape) ~ '\s'
+            )
+        fail_msg: >-
+          Refusing to resize active swap file {{ swap_file_path }}. Rebuild from
+          an image where this swap file is inactive.
+        quiet: true
+
+    - name: inspect the staged swap file
+      ansible.builtin.stat:
+        path: "{{ swap_file_staging_path }}"
+        get_checksum: false
+      register: swap_staged_file
+
+    - name: validate the staged swap file type
+      ansible.builtin.assert:
+        that:
+          - not swap_staged_file.stat.exists or (swap_staged_file.stat.isreg | default(false))
+        fail_msg: >-
+          Refusing to remove {{ swap_file_staging_path }} because the role-owned
+          staging path is not a regular file.
+        quiet: true
+
+    - name: remove an incomplete staged swap file
+      ansible.builtin.file:
+        path: "{{ swap_file_staging_path }}"
+        state: absent
+      when: swap_staged_file.stat.exists
+
+    - name: create the staged swap file
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/mkswap
+          - --file
+          - --size
+          - "{{ swap_file_size_bytes }}"
+          - --lock=yes
+          - "{{ swap_file_staging_path }}"
+      changed_when: true
+
+    - name: secure the staged swap file
+      ansible.builtin.file:
+        path: "{{ swap_file_staging_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: inspect the staged swap file metadata
+      ansible.builtin.stat:
+        path: "{{ swap_file_staging_path }}"
+        get_checksum: false
+      register: swap_staged_file_metadata
+
+    - name: inspect the staged swap file signature
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/blkid
+          - --probe
+          - --match-tag
+          - TYPE
+          - --output
+          - value
+          - "{{ swap_file_staging_path }}"
+      register: swap_staged_file_signature
+      changed_when: false
+
+    - name: validate the staged swap file
+      ansible.builtin.assert:
+        that:
+          - swap_staged_file_metadata.stat.isreg
+          - swap_staged_file_metadata.stat.size == swap_file_size_bytes
+          - swap_staged_file_metadata.stat.mode == '0600'
+          - swap_staged_file_metadata.stat.pw_name == 'root'
+          - swap_staged_file_metadata.stat.gr_name == 'root'
+          - swap_staged_file_signature.stdout | trim == 'swap'
+        fail_msg: >-
+          The staged swap file does not have the requested size, permissions,
+          ownership, or swap signature.
+        quiet: true
+
+    - name: install the staged swap file atomically
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/mv
+          - --force
+          - --no-target-directory
+          - "{{ swap_file_staging_path }}"
+          - "{{ swap_file_path }}"
+      changed_when: true
+
+- name: secure the swap file
+  ansible.builtin.file:
+    path: "{{ swap_file_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: inspect the system sysctl configuration directory
+  ansible.builtin.stat:
+    path: /etc/sysctl.d
+  register: swap_sysctl_configuration_directory
+
+- name: validate the system sysctl configuration directory
+  ansible.builtin.assert:
+    that:
+      - swap_sysctl_configuration_directory.stat.isdir | default(false)
+    fail_msg: >-
+      The RHEL system sysctl configuration directory /etc/sysctl.d is missing.
+    quiet: true
+
+- name: configure swap swappiness for boot
+  ansible.builtin.copy:
+    content: "vm.swappiness = {{ swap_swappiness }}\n"
+    dest: /etc/sysctl.d/90-swap.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: configure the swap file for boot
   ansible.posix.mount:
-    name: none
+    path: none
     src: "{{ swap_file_path }}"
     fstype: swap
-    opts: sw
-    state: "{{ swap_file_state }}"
-
-- ansible.builtin.include_tasks: disable.yaml
-  when: swap_file_state == 'absent'
-
-- ansible.builtin.include_tasks: enable.yaml
-  when: swap_file_state == 'present'
+    opts: defaults
+    dump: "0"
+    passno: "0"
+    state: present
+  notify:
+    - swap reload systemd manager

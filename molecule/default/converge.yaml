@@ -1,7 +1,25 @@
 ---
-- name: Converge
+- name: converge
   hosts: all
-  vars:
-    swap_role_debug: true
+  vars_files:
+    - group_vars/all.yaml
+  pre_tasks:
+    - name: install the rhel sysctl directory provider for swap testing
+      ansible.builtin.dnf:
+        name: systemd-udev
+        state: present
+
+    - name: read live swappiness before convergence
+      ansible.builtin.slurp:
+        src: /proc/sys/vm/swappiness
+      register: molecule_live_swappiness
+
+    - name: record live swappiness before convergence
+      ansible.builtin.copy:
+        content: "{{ molecule_live_swappiness.content | b64decode }}"
+        dest: /tmp/molecule-swappiness-before
+        owner: root
+        group: root
+        mode: "0600"
   roles:
     - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
