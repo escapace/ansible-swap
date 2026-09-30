@@ -9,6 +9,7 @@
   ansible.builtin.systemd_service:
     daemon_reload: true
   when:
+    - not ansible_check_mode
     - ansible_facts.get("service_mgr") == "systemd"
     - swap_systemd_runtime.stat.isdir | default(false)
   listen: swap reload systemd manager
